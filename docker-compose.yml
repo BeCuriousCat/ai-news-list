@@ -1,0 +1,21 @@
+version: '3.8'
+
+services:
+  ai-news-list:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: ai-news-list
+    ports:
+      - "3000:3000"
+    environment:
+      - NODE_ENV=production
+      # Optional: Add GitHub Token for higher API rate limits
+      # - GITHUB_TOKEN=your_github_token_here
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:3000/api/trending?since=daily"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s

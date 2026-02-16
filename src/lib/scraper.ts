@@ -1,15 +1,15 @@
-import * as cheerio from 'cheerio';
-import { Repository, TrendingParams } from './types';
+import * as cheerio from "cheerio";
+import { Repository, TrendingParams } from "./types";
 
 // Parse number string like "1,234" or "12.3k" to number
 function parseNumber(str: string): number {
   if (!str) return 0;
-  str = str.trim().replace(/,/g, '');
+  str = str.trim().replace(/,/g, "");
 
-  if (str.endsWith('k')) {
+  if (str.endsWith("k")) {
     return Math.floor(parseFloat(str) * 1000);
   }
-  if (str.endsWith('K')) {
+  if (str.endsWith("K")) {
     return Math.floor(parseFloat(str) * 1000);
   }
 
@@ -26,27 +26,54 @@ function parseStarsToday(str: string): number {
 }
 
 // Fetch HTML from GitHub Trending
-export async function fetchTrendingHTML(params: TrendingParams): Promise<string> {
-  const url = new URL('https://github.com/trending');
+export async function fetchTrendingHTML(
+  params: TrendingParams,
+): Promise<string> {
+  // GitHub 代理列表（国内可访问）
+  const githubProxies = [
+    "https://ghproxy.net/",
+    "https://mirror.ghproxy.com/",
+    "", // 直连（最后尝试）
+  ];
 
+  // 构建目标 URL
+  const targetUrl = new URL("https://github.com/trending");
   if (params.language) {
-    url.pathname = `/trending/${params.language}`;
+    targetUrl.pathname = `/trending/${params.language}`;
   }
-  url.searchParams.set('since', params.since);
+  targetUrl.searchParams.set("since", params.since);
 
-  const response = await fetch(url.toString(), {
-    headers: {
-      'User-Agent': 'Mozilla/5.0 (compatible; AI-News-Bot/1.0)',
-      'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-      'Accept-Language': 'en-US,en;q=0.5',
-    },
-  });
+  // 代理配置
+  const proxyUrl = process.env.HTTPS_PROXY || process.env.HTTP_PROXY;
 
-  if (!response.ok) {
-    throw new Error(`Failed to fetch trending page: ${response.status}`);
+  // 尝试不同的方式获取数据
+  for (const proxy of githubProxies) {
+    try {
+      const fetchUrl = proxy
+        ? `${proxy}${targetUrl.toString()}`
+        : targetUrl.toString();
+
+      const response = await fetch(fetchUrl, {
+        headers: {
+          "User-Agent": "Mozilla/5.0 (compatible; AI-News-Bot/1.0)",
+          Accept:
+            "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+          "Accept-Language": "en-US,en;q=0.5",
+        },
+        // @ts-ignore - Node.js fetch 代理支持
+        dispatcher: proxyUrl ? undefined : undefined,
+      });
+
+      if (response.ok) {
+        return response.text();
+      }
+    } catch (error) {
+      console.log(`Failed with proxy ${proxy || "direct"}:`, error);
+      continue;
+    }
   }
 
-  return response.text();
+  throw new Error("Failed to fetch trending page from all sources");
 }
 
 // Parse HTML and extract repository data
@@ -54,38 +81,42 @@ export function parseTrendingRepos(html: string): Repository[] {
   const $ = cheerio.load(html);
   const repos: Repository[] = [];
 
-  $('article.Box-row').each((_, element) => {
+  $("article.Box-row").each((_, element) => {
     const $row = $(element);
 
     // Get full name from href
-    const href = $row.find('h2 a').attr('href') || '';
-    const fullName = href.replace(/^\//, '');
-    const [owner, name] = fullName.split('/');
+    const href = $row.find("h2 a").attr("href") || "";
+    const fullName = href.replace(/^\//, "");
+    const [owner, name] = fullName.split("/");
 
     if (!owner || !name) return;
 
     // Get description
-    const description = $row.find('p.col-9').text().trim() ||
-                       $row.find('[itemprop="description"]').text().trim() ||
-                       null;
+    const description =
+      $row.find("p.col-9").text().trim() ||
+      $row.find('[itemprop="description"]').text().trim() ||
+      null;
 
     // Get language
-    const language = $row.find('[itemprop="programmingLanguage"]').text().trim() ||
-                    $row.find('[data-testid="language"]').text().trim() ||
-                    null;
+    const language =
+      $row.find('[itemprop="programmingLanguage"]').text().trim() ||
+      $row.find('[data-testid="language"]').text().trim() ||
+      null;
 
     // Get stars count
     const starsText = $row.find('a[href*="/stargazers"]').text().trim();
     const stars = parseNumber(starsText);
 
     // Get forks count
-    const forksText = $row.find('a[href*="/forks"]').text().trim() ||
-                     $row.find('a[href*="/network/members"]').text().trim();
+    const forksText =
+      $row.find('a[href*="/forks"]').text().trim() ||
+      $row.find('a[href*="/network/members"]').text().trim();
     const forks = parseNumber(forksText);
 
     // Get stars today
-    const starsTodayText = $row.find('span.float-sm-right').text().trim() ||
-                          $row.find('[data-testid="stars-today"]').text().trim();
+    const starsTodayText =
+      $row.find("span.float-sm-right").text().trim() ||
+      $row.find('[data-testid="stars-today"]').text().trim();
     const starsToday = parseStarsToday(starsTodayText);
 
     // Get topics
@@ -97,14 +128,16 @@ export function parseTrendingRepos(html: string): Repository[] {
 
     // Get contributors
     const builtBy: { username: string; avatarUrl: string }[] = [];
-    $row.find('.avatar-stack a, [data-testid="avatar-stack"] a').each((_, avatarEl) => {
-      const $avatar = $(avatarEl);
-      const username = $avatar.attr('href')?.replace(/^\//, '') || '';
-      const avatarUrl = $avatar.find('img').attr('src') || '';
-      if (username) {
-        builtBy.push({ username, avatarUrl });
-      }
-    });
+    $row
+      .find('.avatar-stack a, [data-testid="avatar-stack"] a')
+      .each((_, avatarEl) => {
+        const $avatar = $(avatarEl);
+        const username = $avatar.attr("href")?.replace(/^\//, "") || "";
+        const avatarUrl = $avatar.find("img").attr("src") || "";
+        if (username) {
+          builtBy.push({ username, avatarUrl });
+        }
+      });
 
     repos.push({
       owner,
@@ -125,7 +158,9 @@ export function parseTrendingRepos(html: string): Repository[] {
 }
 
 // Main function to get trending repositories
-export async function getTrendingRepos(params: TrendingParams): Promise<Repository[]> {
+export async function getTrendingRepos(
+  params: TrendingParams,
+): Promise<Repository[]> {
   const html = await fetchTrendingHTML(params);
   return parseTrendingRepos(html);
 }
